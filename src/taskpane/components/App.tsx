@@ -13,12 +13,22 @@ import {
   Text,
   makeStyles,
   tokens,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@fluentui/react-components";
+
+import { Settings24Regular } from "@fluentui/react-icons";
 
 import { llSupabase } from "../services/legalLedgerSupabase";
 import { getCurrentEmailBundle } from "../services/outlook";
 import { ScopeType, listRecentCases, listRecentClients, filterResults, loadAttachmentTree } from "../services/legalLedgerData";
 
+const ORG_ID_KEY = "ll:addin:orgId";
+const ORG_NAME_KEY = "ll:addin:orgName";
 
 
 interface AppProps {
@@ -100,7 +110,14 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const [llUserEmail, setLlUserEmail] = React.useState<string | null>(null);
   const [orgs, setOrgs] = React.useState<any[]>([]);
-  const [selectedOrgId, setSelectedOrgId] = React.useState<string>("");
+  const [selectedOrgId, setSelectedOrgId] = React.useState<string>(() => {
+    return localStorage.getItem(ORG_ID_KEY) ?? "";
+  });
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [selectedOrgName, setSelectedOrgName] = React.useState<string>(() => {
+    return localStorage.getItem(ORG_NAME_KEY) ?? "";
+  });
+
 
   React.useEffect(() => {
     llSupabase.auth.getSession().then(({ data }) => {
@@ -114,6 +131,22 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  const didInitOrgsRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!llUserEmail) {
+      didInitOrgsRef.current = false;
+      return;
+    }
+
+    if (didInitOrgsRef.current) return;
+    didInitOrgsRef.current = true;
+
+    // Load org list + validate saved org as soon as the add-in opens
+    void onLoadMyOrgs({ silent: true });
+  }, [llUserEmail]);
+
 
   async function onLlLogin() {
     try {
@@ -139,23 +172,55 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     setLlAuthStatus("Logged out.");
   }
 
-  async function onLoadMyOrgs() {
+  async function onLoadMyOrgs(opts: { silent?: boolean } = {}) {
     try {
-      setLlAuthStatus("Loading orgs…");
+      if (!opts.silent) setLlAuthStatus("Loading organizations...");
+
       const { data, error } = await llSupabase.rpc("list_my_orgs");
       if (error) throw error;
 
       const list = Array.isArray(data) ? data : [];
       setOrgs(list);
 
-      const firstId = list?.[0]?.org_id || list?.[0]?.id || "";
-      if (firstId) setSelectedOrgId(firstId);
+      // Decide which org to keep:
+      // 1) saved org from localStorage
+      // 2) current selected org in state
+      // 3) fallback to first org in list
+      const savedOrgId = localStorage.getItem(ORG_ID_KEY) ?? "";
+      const preferredOrgId = savedOrgId || selectedOrgId || "";
 
-      setLlAuthStatus(`Loaded ${list.length} org(s).`);
+      let chosen = list.find((o) => getOrgId(o) === preferredOrgId) ?? null;
+      if (!chosen && list.length > 0) chosen = list[0];
+
+      if (chosen) {
+        const id = getOrgId(chosen);
+        const name = getOrgName(chosen);
+
+        // Only update if changed (prevents loops + flicker)
+        if (id !== selectedOrgId) setSelectedOrgId(id);
+        if (name !== selectedOrgName) setSelectedOrgName(name);
+
+        // Keep localStorage consistent
+        if (localStorage.getItem(ORG_ID_KEY) !== id) localStorage.setItem(ORG_ID_KEY, id);
+        if (localStorage.getItem(ORG_NAME_KEY) !== name) localStorage.setItem(ORG_NAME_KEY, name);
+      } else {
+        // No orgs available
+        if (selectedOrgId) setSelectedOrgId("");
+        if (selectedOrgName) setSelectedOrgName("");
+        localStorage.removeItem(ORG_ID_KEY);
+        localStorage.removeItem(ORG_NAME_KEY);
+      }
+
+      if (!opts.silent) {
+        setLlAuthStatus(list.length > 0 ? `Loaded ${list.length} org(s).` : "No organizations found.");
+      }
     } catch (e: any) {
-      setLlAuthStatus(`Error: ${e?.message ?? String(e)}`);
+      console.error(e);
+      if (!opts.silent) setLlAuthStatus(`Error loading orgs: ${e?.message ?? String(e)}`);
+      throw e;
     }
   }
+
 
   // -----------------------
   // Destination
@@ -171,6 +236,14 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   const [selectedFolderId, setSelectedFolderId] = React.useState<string>(""); // optional
 
   const destFiltered = React.useMemo(() => filterResults(destAllResults, destQuery), [destAllResults, destQuery]);
+
+  function persistSelectedOrg(orgId: string, orgName: string) {
+    setSelectedOrgId(orgId);
+    setSelectedOrgName(orgName);
+    localStorage.setItem(ORG_ID_KEY, orgId);
+    localStorage.setItem(ORG_NAME_KEY, orgName);
+  }
+
 
   const selectedScopeLabel = React.useMemo(() => {
     const found = destAllResults.find((r) => r.id === selectedScopeId);
@@ -323,6 +396,26 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   }, [orgs, selectedOrgId]);
 
 
+  async function openSettings() {
+    setSettingsOpen(true);
+
+    // Always restore saved org immediately (so UI + queries are consistent)
+    const savedOrgId = localStorage.getItem("ll:addin:orgId") ?? "";
+    const savedOrgName = localStorage.getItem("ll:addin:orgName") ?? "";
+
+    if (savedOrgId) setSelectedOrgId(savedOrgId);
+    if (savedOrgName) setSelectedOrgName(savedOrgName);
+
+    // If logged in, auto-load orgs when opening settings
+    if (llUserEmail) {
+      try {
+        await onLoadMyOrgs({ silent: true });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }
+
   return (
     <div className={styles.root}>
       {/* Header */}
@@ -351,65 +444,25 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       {/* Legal Ledger Connection */}
       <Card>
         <CardHeader
-          header={<Text weight="semibold">Legal Ledger connection</Text>}
-          description={<Text size={200} className={styles.subtle}>Log in and select an organization.</Text>}
+          header={<Text weight="semibold">Legal Ledger</Text>}
+          description={
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <Text size={200}>Logged in as: {llUserEmail || "-"}</Text>
+              <Text size={200}>Org: {selectedOrgName || "-"}</Text>
+            </div>
+          }
+
+          action={
+            <Button
+              appearance="subtle"
+              icon={<Settings24Regular />}
+              onClick={openSettings}
+              aria-label="Settings"
+            />
+          }
         />
-        <Divider />
-        <div className={styles.cardBody}>
-          {!isLoggedIn ? (
-            <>
-              <Field label="Email">
-                <Input value={llEmail} onChange={(e) => setLlEmail((e.target as HTMLInputElement).value)} />
-              </Field>
-
-              <Field label="Password">
-                <Input
-                  type="password"
-                  value={llPassword}
-                  onChange={(e) => setLlPassword((e.target as HTMLInputElement).value)}
-                />
-              </Field>
-
-              <div className={styles.row}>
-                <Button appearance="primary" onClick={onLlLogin}>
-                  Log in
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className={styles.row}>
-                <Button onClick={onLoadMyOrgs}>Load my orgs</Button>
-                <Button appearance="secondary" onClick={onLlLogout}>
-                  Log out
-                </Button>
-              </div>
-
-              <Field label="Organization">
-                <Dropdown
-                  value={selectedOrgLabel} // <-- show name, not id
-                  selectedOptions={selectedOrgId ? [selectedOrgId] : []}
-                  onOptionSelect={(_, data) => setSelectedOrgId(String(data.optionValue ?? ""))}
-                  placeholder={orgs.length ? "Select an org…" : "Click “Load my orgs”"}
-                >
-                  {orgs.map((o) => {
-                    const id = getOrgId(o);
-                    const name = getOrgName(o);
-                    return (
-                      <Option key={id} value={id}>
-                        {name}
-                      </Option>
-                    );
-                  })}
-                </Dropdown>
-
-              </Field>
-            </>
-          )}
-
-          {llAuthStatus && <Text size={200}>{llAuthStatus}</Text>}
-        </div>
       </Card>
+
 
       <>
         <div className={styles.row}>
@@ -424,7 +477,12 @@ const App: React.FC<AppProps> = (props: AppProps) => {
             </Dropdown>
           </Field>
 
-          <Button onClick={onLoadRecentDestination}>Reload recent</Button>
+          <Button onClick={onLoadRecentDestination} disabled={!selectedOrgId}>
+            Reload recent
+          </Button>
+          {!selectedOrgId && <Text size={200}>Select an org in settings first.</Text>}
+
+
         </div>
 
         <Field label="Filter">
@@ -550,6 +608,67 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           </div>
         </Card>
       )}
+
+      <Dialog open={settingsOpen} onOpenChange={(_, data) => setSettingsOpen(data.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Legal Ledger settings</DialogTitle>
+
+            <DialogContent>
+              {!llUserEmail ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <Text>You’re not logged in.</Text>
+                  <Button appearance="primary" onClick={onLlLogin /* rename if needed */}>
+                    Log in
+                  </Button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <Field label="Organization">
+                    {orgs.length === 0 ? (
+                      <Text size={200}>Loading organizations…</Text>
+                    ) : (
+                      <Dropdown
+                        value={selectedOrgName || "Select org…"}
+                        selectedOptions={selectedOrgId ? [selectedOrgId] : []}
+                        onOptionSelect={(_, data) => {
+                          const orgId = String(data.optionValue ?? "");
+
+                          const org = orgs.find((o: any) => String(o.org_id ?? o.id) === orgId);
+                          const orgName = String(org?.name ?? org?.org_name ?? org?.title ?? orgId);
+
+                          persistSelectedOrg(orgId, orgName);
+                        }}
+                        placeholder="Select…"
+                      >
+                        {orgs.map((o: any) => {
+                          const id = String(o.org_id ?? o.id);
+                          const name = String(o.name ?? o.org_name ?? o.title ?? id);
+                          return (
+                            <Option key={id} value={id}>
+                              {name}
+                            </Option>
+                          );
+                        })}
+                      </Dropdown>
+                    )}
+                  </Field>
+
+                  <Button onClick={onLlLogout /* rename if needed */}>Log out</Button>
+                </div>
+              )}
+            </DialogContent>
+
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setSettingsOpen(false)}>
+                Done
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+
     </div>
   );
 };
