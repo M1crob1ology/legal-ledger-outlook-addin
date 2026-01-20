@@ -17,6 +17,9 @@ import {
 
 import { llSupabase } from "../services/legalLedgerSupabase";
 import { getCurrentEmailBundle } from "../services/outlook";
+import { ScopeType, listRecentCases, listRecentClients, filterResults, loadAttachmentTree } from "../services/legalLedgerData";
+
+
 
 interface AppProps {
   title: string;
@@ -153,6 +156,75 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       setLlAuthStatus(`Error: ${e?.message ?? String(e)}`);
     }
   }
+
+  // -----------------------
+  // Destination
+  // -----------------------
+  const [scopeType, setScopeType] = React.useState<ScopeType>("case");
+  const [destQuery, setDestQuery] = React.useState("");
+  const [destStatus, setDestStatus] = React.useState("");
+  const [destAllResults, setDestAllResults] = React.useState<Array<{ id: string; label: string; raw: any }>>([]);
+  const [selectedScopeId, setSelectedScopeId] = React.useState<string>("");
+
+  const [treeStatus, setTreeStatus] = React.useState("");
+  const [treeNodes, setTreeNodes] = React.useState<any[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = React.useState<string>(""); // optional
+
+  const destFiltered = React.useMemo(() => filterResults(destAllResults, destQuery), [destAllResults, destQuery]);
+
+  const selectedScopeLabel = React.useMemo(() => {
+    const found = destAllResults.find((r) => r.id === selectedScopeId);
+    return found ? found.label : "";
+  }, [destAllResults, selectedScopeId]);
+
+  async function onLoadRecentDestination() {
+    try {
+      setDestStatus("Loading recent…");
+      setDestAllResults([]);
+      setSelectedScopeId("");
+      setTreeNodes([]);
+      setSelectedFolderId("");
+
+      if (!selectedOrgId) throw new Error("Select an org first.");
+
+      const results =
+        scopeType === "case"
+          ? await listRecentCases({ orgId: selectedOrgId, limit: 200 })
+          : await listRecentClients({ orgId: selectedOrgId, limit: 200 });
+
+
+      setDestAllResults(results);
+      setDestStatus(`Loaded ${results.length} recent ${scopeType}s.`);
+    } catch (e: any) {
+      setDestStatus(`Error: ${e?.message ?? String(e)}`);
+    }
+  }
+
+  async function onLoadFolders() {
+    try {
+      setTreeStatus("Loading folders…");
+      setTreeNodes([]);
+      setSelectedFolderId("");
+
+      if (!selectedScopeId) throw new Error("Select a case/client first.");
+
+      const nodes = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
+      setTreeNodes(nodes);
+      setTreeStatus(`Loaded ${nodes.length} node(s).`);
+    } catch (e: any) {
+      setTreeStatus(`Error: ${e?.message ?? String(e)}`);
+    }
+  }
+
+  // Auto-load recent when org or type changes (and user is logged in)
+  React.useEffect(() => {
+    if (!llUserEmail || !selectedOrgId) return;
+    setDestQuery("");
+    void onLoadRecentDestination();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llUserEmail, selectedOrgId, scopeType]);
+
+
 
   // -----------------------
   // Bundle
@@ -338,6 +410,82 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           {llAuthStatus && <Text size={200}>{llAuthStatus}</Text>}
         </div>
       </Card>
+
+      <>
+        <div className={styles.row}>
+          <Field label="Type" className={styles.grow}>
+            <Dropdown
+              value={scopeType === "case" ? "Case" : "Client"}
+              selectedOptions={[scopeType]}
+              onOptionSelect={(_, data) => setScopeType(data.optionValue as ScopeType)}
+            >
+              <Option value="case">Case</Option>
+              <Option value="client">Client</Option>
+            </Dropdown>
+          </Field>
+
+          <Button onClick={onLoadRecentDestination}>Reload recent</Button>
+        </div>
+
+        <Field label="Filter">
+          <Input
+            value={destQuery}
+            onChange={(e) => setDestQuery((e.target as HTMLInputElement).value)}
+            placeholder={scopeType === "case" ? "Type to filter cases…" : "Type to filter clients…"}
+          />
+        </Field>
+
+        {destStatus && <Text size={200}>{destStatus}</Text>}
+
+        {destFiltered.length > 0 && (
+          <Field label="Select">
+            <Dropdown
+              value={selectedScopeLabel}
+              selectedOptions={selectedScopeId ? [selectedScopeId] : []}
+              onOptionSelect={(_, data) => setSelectedScopeId(String(data.optionValue ?? ""))}
+              placeholder="Select…"
+            >
+              {destFiltered.slice(0, 25).map((r) => (
+                <Option key={r.id} value={r.id}>
+                  {r.label}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+
+        <div className={styles.row}>
+          <Button onClick={onLoadFolders} disabled={!selectedScopeId}>
+            Load attachment folders
+          </Button>
+          {treeStatus && <Text size={200}>{treeStatus}</Text>}
+        </div>
+
+        {treeNodes.length > 0 && (
+          <Field label="Folder (optional)">
+            <Dropdown
+              value={
+                selectedFolderId
+                  ? String(treeNodes.find((n) => String(n.id) === String(selectedFolderId))?.name ?? selectedFolderId)
+                  : "(Root)"
+              }
+              selectedOptions={selectedFolderId ? [selectedFolderId] : []}
+              onOptionSelect={(_, data) => setSelectedFolderId(String(data.optionValue ?? ""))}
+            >
+              <Option value="">(Root)</Option>
+              {treeNodes
+                .filter((n) => (n.node_type ?? n.type) === "folder")
+                .map((n) => (
+                  <Option key={String(n.id)} value={String(n.id)}>
+                    {String(n.name ?? n.title ?? n.id)}
+                  </Option>
+                ))}
+            </Dropdown>
+          </Field>
+        )}
+      </>
+
+
 
       {/* Bundle */}
       <Card>
