@@ -98,6 +98,19 @@ const useStyles = makeStyles({
   },
 });
 
+function isUuid(v: unknown): v is string {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
+function uniqueUuids(values: unknown[]): string[] {
+  const out: string[] = [];
+  for (const v of values) {
+    if (isUuid(v) && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+
 const App: React.FC<AppProps> = (props: AppProps) => {
   const styles = useStyles();
 
@@ -117,6 +130,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   const [selectedOrgName, setSelectedOrgName] = React.useState<string>(() => {
     return localStorage.getItem(ORG_NAME_KEY) ?? "";
   });
+  const [folderFilter, setFolderFilter] = React.useState("");
+  const [selectedFolderId, setSelectedFolderId] = React.useState<string>("");
+
+
+
 
 
   React.useEffect(() => {
@@ -146,6 +164,8 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     // Load org list + validate saved org as soon as the add-in opens
     void onLoadMyOrgs({ silent: true });
   }, [llUserEmail]);
+
+
 
 
   async function onLlLogin() {
@@ -233,7 +253,13 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const [treeStatus, setTreeStatus] = React.useState("");
   const [treeNodes, setTreeNodes] = React.useState<any[]>([]);
-  const [selectedFolderId, setSelectedFolderId] = React.useState<string>(""); // optional
+
+  React.useEffect(() => {
+    if (!selectedScopeId) return;
+    void onLoadFolders(); // auto-load whenever selection changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedScopeId, scopeType]);
+
 
   const destFiltered = React.useMemo(() => filterResults(destAllResults, destQuery), [destAllResults, destQuery]);
 
@@ -249,6 +275,19 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     const found = destAllResults.find((r) => r.id === selectedScopeId);
     return found ? found.label : "";
   }, [destAllResults, selectedScopeId]);
+
+  React.useEffect(() => {
+    // When you change destination, reset folder/tree UI
+    setTreeNodes([]);
+    setSelectedFolderId("");
+    setTreeStatus("");
+  }, [scopeType, selectedScopeId]);
+
+  const selectedFolderLabel = React.useMemo(() => {
+    if (!selectedFolderId) return "(Root)";
+    const node = (treeNodes ?? []).find((n: any) => String(n.id) === String(selectedFolderId));
+    return node?.name ?? "(Root)";
+  }, [selectedFolderId, treeNodes]);
 
   async function onLoadRecentDestination() {
     try {
@@ -273,6 +312,39 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     }
   }
 
+  function onChangeScopeType(next: ScopeType) {
+    // Update the type
+    setScopeType(next);
+
+    // Reset destination selection + lists
+    setDestQuery("");
+    setDestStatus("");
+    setDestAllResults([]);
+    setSelectedScopeId("");
+
+    // Reset folders UI (this is what fixes the “folder part remains” bug)
+    setTreeStatus("");
+    setTreeNodes([]);
+    setSelectedFolderId("");
+    setFolderFilter("");
+  }
+
+
+  const folderNodes = React.useMemo(() => {
+  const folders = (treeNodes ?? []).filter((n: any) => (n.kind ?? n.type) === "folder");
+  const q = folderFilter.trim().toLowerCase();
+  if (!q) return folders;
+  return folders.filter((f: any) => String(f.name ?? "").toLowerCase().includes(q));
+}, [treeNodes, folderFilter]);
+
+
+  const filteredFolderNodes = React.useMemo(() => {
+    const q = folderFilter.trim().toLowerCase();
+    if (!q) return folderNodes;
+    return folderNodes.filter((n: any) => String(n.name ?? "").toLowerCase().includes(q));
+  }, [folderNodes, folderFilter]);
+
+
   async function onLoadFolders() {
     try {
       setTreeStatus("Loading folders…");
@@ -281,7 +353,48 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       if (!selectedScopeId) throw new Error("Select a case/client first.");
 
-      const nodes = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
+      // Find the selected row so we can access raw fields (party/client record)
+      const selected = destAllResults.find((r) => r.id === selectedScopeId);
+      const raw = selected?.raw ?? {};
+
+      // Candidate IDs to try for CLIENT scope.
+      // (We try selectedScopeId + common “party/client” id fields that refactors usually leave behind.)
+      const candidateScopeIds =
+        scopeType === "client"
+          ? uniqueUuids([
+            selectedScopeId,
+            raw.id,
+            raw.party_id,
+            raw.partyId,
+            raw.client_id,
+            raw.clientId,
+            raw.client_scope_id,
+            raw.clientScopeId,
+            raw.legacy_client_id,
+            raw.legacyClientId,
+          ])
+          : uniqueUuids([selectedScopeId]);
+
+      let nodes: any[] = [];
+      let usedScopeId = candidateScopeIds[0] ?? selectedScopeId;
+
+      for (const id of candidateScopeIds) {
+        const attempt = await loadAttachmentTree({ scopeType, scopeId: id });
+        // If your RPC returns Root as a node, you may want `attempt.length > 1` here instead of > 0.
+        if (Array.isArray(attempt) && attempt.length > 0) {
+          nodes = attempt;
+          usedScopeId = id;
+          break;
+        }
+      }
+
+      setTreeNodes(nodes);
+      setTreeStatus(
+        nodes.length > 0
+          ? `Loaded ${nodes.length} node(s).`
+          : `Loaded 0 node(s). (Tried scope IDs: ${candidateScopeIds.join(", ") || "none"})`
+      );
+
       setTreeNodes(nodes);
       setTreeStatus(`Loaded ${nodes.length} node(s).`);
     } catch (e: any) {
@@ -470,7 +583,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
             <Dropdown
               value={scopeType === "case" ? "Case" : "Client"}
               selectedOptions={[scopeType]}
-              onOptionSelect={(_, data) => setScopeType(data.optionValue as ScopeType)}
+              onOptionSelect={(_, data) => onChangeScopeType(data.optionValue as ScopeType)}
             >
               <Option value="case">Case</Option>
               <Option value="client">Client</Option>
@@ -485,6 +598,8 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
         </div>
 
+        {destStatus && <Text size={200}>{destStatus}</Text>}
+
         <Field label="Filter">
           <Input
             value={destQuery}
@@ -493,7 +608,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           />
         </Field>
 
-        {destStatus && <Text size={200}>{destStatus}</Text>}
+
 
         {destFiltered.length > 0 && (
           <Field label="Select">
@@ -512,35 +627,40 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           </Field>
         )}
 
-        <div className={styles.row}>
-          <Button onClick={onLoadFolders} disabled={!selectedScopeId}>
-            Load attachment folders
-          </Button>
-          {treeStatus && <Text size={200}>{treeStatus}</Text>}
-        </div>
+        {selectedScopeId && (
+          <>
+            <div className={styles.row}>
+              {treeStatus && <Text size={200}>{treeStatus}</Text>}
+            </div>
 
-        {treeNodes.length > 0 && (
-          <Field label="Folder (optional)">
-            <Dropdown
-              value={
-                selectedFolderId
-                  ? String(treeNodes.find((n) => String(n.id) === String(selectedFolderId))?.name ?? selectedFolderId)
-                  : "(Root)"
-              }
-              selectedOptions={selectedFolderId ? [selectedFolderId] : []}
-              onOptionSelect={(_, data) => setSelectedFolderId(String(data.optionValue ?? ""))}
-            >
-              <Option value="">(Root)</Option>
-              {treeNodes
-                .filter((n) => (n.node_type ?? n.type) === "folder")
-                .map((n) => (
-                  <Option key={String(n.id)} value={String(n.id)}>
-                    {String(n.name ?? n.title ?? n.id)}
+            <Field label="Filter folders">
+              <Input
+                value={folderFilter}
+                onChange={(e) => setFolderFilter((e.target as HTMLInputElement).value)}
+                placeholder="Type to filter folders…"
+              />
+            </Field>
+
+            <Field label="Folder (optional)">
+              <Dropdown
+                value={selectedFolderLabel}
+                selectedOptions={selectedFolderId ? [selectedFolderId] : [""]}
+                onOptionSelect={(_, data) => setSelectedFolderId(String(data.optionValue ?? ""))}
+              >
+                <Option value="">(Root)</Option>
+
+                {filteredFolderNodes.map((n: any) => (
+                  <Option key={n.id} value={String(n.id)}>
+                    {n.name}
                   </Option>
                 ))}
-            </Dropdown>
-          </Field>
+              </Dropdown>
+            </Field>
+
+          </>
         )}
+
+
       </>
 
 

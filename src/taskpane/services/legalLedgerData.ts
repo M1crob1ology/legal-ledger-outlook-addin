@@ -1,6 +1,12 @@
 import { llSupabase } from "./legalLedgerSupabase";
 
 export type ScopeType = "case" | "client";
+type AttachmentScopeType = "case" | "party";
+
+function toAttachmentScopeType(scopeType: ScopeType): AttachmentScopeType {
+    return scopeType === "client" ? "party" : "case";
+}
+
 export type SearchResult = { id: string; label: string; raw: any };
 
 function norm(v: any): string {
@@ -18,6 +24,24 @@ function firstNonEmptyString(row: any, keys: string[]): string {
 function looksLikeUuid(s: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
+
+function getClientScopeId(row: any): string {
+    // If "parties" is a wrapper around legacy client records, it often contains a client id
+    const candidates = [
+        row?.client_id,
+        row?.clientId,
+        row?.client_uuid,
+        row?.clientUuid,
+        row?.legacy_client_id,
+        row?.legacyClientId,
+    ]
+        .map((v) => (v == null ? "" : String(v)))
+        .filter(Boolean);
+
+    const hit = candidates.find(looksLikeUuid);
+    return hit ?? String(row?.id ?? "");
+}
+
 
 function shortId(id: any): string {
     const s = String(id ?? "");
@@ -130,30 +154,30 @@ function isClientParty(r: any): boolean {
 }
 
 export async function listRecentClients(p: { orgId: string; limit?: number }): Promise<SearchResult[]> {
-    const limit = p.limit ?? 200;
+  const limit = p.limit ?? 200;
 
-    // 1) Prefer the new system: parties table
-    try {
-        const allParties = await listWithFallbacks("parties", p.orgId, limit);
-        const clients = allParties.filter(isClientParty);
+  // Clients are Parties now. Attachments use scope_type='party' and scope_id=parties.id.
+  // So this function MUST return party.id as SearchResult.id.
+  const allParties = await listWithFallbacks("parties", p.orgId, limit);
 
-        // If we found any, use them
-        if (clients.length > 0) {
-            return clients.map((r) => ({ id: String(r.id), label: buildClientLabel(r), raw: r }));
-        }
+  if (!Array.isArray(allParties) || allParties.length === 0) {
+    // IMPORTANT: Do NOT fall back to the legacy `clients` table, because those IDs
+    // won't match attachment_nodes.scope_id (which is party.id). Returning legacy IDs
+    // would break attachments again.
+    return [];
+  }
 
-        // If no type flag detected, still return parties as a fallback
-        if (allParties.length > 0) {
-            return allParties.map((r) => ({ id: String(r.id), label: buildClientLabel(r), raw: r }));
-        }
-    } catch {
-        // ignore and fall back to clients table
-    }
+  const clients = allParties.filter(isClientParty);
 
-    // 2) Legacy fallback: clients table
-    const rows = await listWithFallbacks("clients", p.orgId, limit);
-    return rows.map((r) => ({ id: String(r.id), label: buildClientLabel(r), raw: r }));
+  const rowsToUse = clients.length > 0 ? clients : allParties;
+
+  return rowsToUse.map((r: any) => ({
+    id: String(r.id), // party.id (UUID) — required for attachments
+    label: buildClientLabel(r),
+    raw: r,
+  }));
 }
+
 
 
 export function filterResults(results: SearchResult[], q: string): SearchResult[] {
@@ -185,12 +209,48 @@ export function filterResults(results: SearchResult[], q: string): SearchResult[
     });
 }
 
-export async function loadAttachmentTree(p: { scopeType: ScopeType; scopeId: string }): Promise<any[]> {
-    const { data, error } = await llSupabase.rpc("list_attachment_tree", {
-        p_scope_type: p.scopeType,
-        p_scope_id: p.scopeId,
-    });
+export type AttachmentTreeNode = {
+  id: string;
+  name: string;
+  kind: "folder" | "file";
+  parent_id: string | null;
+  raw: any;
+};
 
-    if (error) throw error;
-    return (data as any[]) ?? [];
+function normalizeAttachmentNode(n: any): AttachmentTreeNode {
+  const kindRaw =
+    n.kind ??
+    n.type ?? // <-- what Supabase returns from attachment_nodes
+    n.node_type ??
+    n.nodeType ??
+    n.item_type ??
+    n.itemType;
+
+  const kind = String(kindRaw ?? "").toLowerCase();
+
+  return {
+    id: String(n.id),
+    name: String(n.name ?? n.filename ?? n.title ?? "(unnamed)"),
+    kind: kind === "folder" ? "folder" : "file",
+    parent_id: n.parent_id ?? n.parentId ?? null,
+    raw: n,
+  };
 }
+
+export async function loadAttachmentTree(p: { scopeType: "case" | "client"; scopeId: string }): Promise<AttachmentTreeNode[]> {
+  const scopeType = toAttachmentScopeType(p.scopeType); // "client" -> "party", "case" -> "case"
+
+  const { data, error } = await (llSupabase as any).rpc("list_attachment_tree", {
+    p_scope_type: scopeType,
+    p_scope_id: p.scopeId,
+    p_limit: 10000,
+    p_offset: 0,
+  });
+
+  if (error) throw error;
+
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map(normalizeAttachmentNode);
+}
+
+
