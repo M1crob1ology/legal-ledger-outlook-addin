@@ -434,6 +434,28 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const [isUploading, setIsUploading] = React.useState(false);
 
+    // Auto-clear success message after 7 seconds (only on success)
+  React.useEffect(() => {
+    const isSuccess =
+      !!uploadStatus &&
+      (uploadStatus.startsWith("✅") || uploadStatus.toLowerCase().includes("uploaded"));
+
+    let t: number | undefined;
+
+    if (isSuccess) {
+      t = window.setTimeout(() => {
+        setUploadStatus("");
+      }, 7000);
+    }
+
+    // Always return a cleanup function (prevents TS7030)
+    return () => {
+      if (t !== undefined) window.clearTimeout(t);
+    };
+  }, [uploadStatus]);
+
+
+
 
 
 
@@ -627,6 +649,13 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     }
   }
 
+  const canUpload =
+    !!llUserEmail &&
+    !!selectedOrgId &&
+    !!selectedScopeId &&
+    (includeEml || includeAttachments) &&
+    !uploading;
+
   return (
     <div className={styles.root}>
       {/* Header */}
@@ -779,21 +808,19 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       <Card>
         <CardHeader
-          header={<Text weight="semibold">Email bundle</Text>}
+          header={<Text weight="semibold">Upload to Legal Ledger</Text>}
           description={
             <Text size={200} className={styles.subtle}>
-              Prepare a bundle (email.eml + attachments). Upload comes next.
+              Choose options and click "Upload to Legal Ledger" to upload the email and/or attachments to the selected case or client.
             </Text>
           }
         />
+
+
         <Divider />
         <div className={styles.cardBody}>
           <div className={styles.row}>
-            <Button
-              appearance="primary"
-              disabled={uploading || (!includeEml && !includeAttachments)}
-              onClick={onUploadBundle}
-            >
+            <Button appearance="primary" onClick={onUploadBundle} disabled={!canUpload}>
               Upload to Legal Ledger
             </Button>
 
@@ -855,7 +882,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
             <DialogContent>
               {!llUserEmail ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <Text>You’re not logged in.</Text>
+                  <Text>You're not logged in.</Text>
                   <Button appearance="primary" onClick={onLlLogin /* rename if needed */}>
                     Log in
                   </Button>
