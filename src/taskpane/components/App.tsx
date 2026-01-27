@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Checkbox,
   Divider,
   Dropdown,
   Field,
@@ -25,7 +26,9 @@ import { Settings24Regular } from "@fluentui/react-icons";
 
 import { llSupabase } from "../services/legalLedgerSupabase";
 import { getCurrentEmailBundle } from "../services/outlook";
-import { ScopeType, listRecentCases, listRecentClients, filterResults, loadAttachmentTree } from "../services/legalLedgerData";
+import { loadAttachmentTree, ScopeType, filterResults, listRecentCases, listRecentClients } from "../services/legalLedgerData";
+import { uploadAttachmentFile } from "../services/legalLedgerUpload";
+
 
 const ORG_ID_KEY = "ll:addin:orgId";
 const ORG_NAME_KEY = "ll:addin:orgName";
@@ -165,6 +168,8 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     void onLoadMyOrgs({ silent: true });
   }, [llUserEmail]);
 
+  const [sendEml, setSendEml] = React.useState(true);
+  const [sendAttachments, setSendAttachments] = React.useState(true);
 
 
 
@@ -331,11 +336,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
 
   const folderNodes = React.useMemo(() => {
-  const folders = (treeNodes ?? []).filter((n: any) => (n.kind ?? n.type) === "folder");
-  const q = folderFilter.trim().toLowerCase();
-  if (!q) return folders;
-  return folders.filter((f: any) => String(f.name ?? "").toLowerCase().includes(q));
-}, [treeNodes, folderFilter]);
+    const folders = (treeNodes ?? []).filter((n: any) => (n.kind ?? n.type) === "folder");
+    const q = folderFilter.trim().toLowerCase();
+    if (!q) return folders;
+    return folders.filter((f: any) => String(f.name ?? "").toLowerCase().includes(q));
+  }, [treeNodes, folderFilter]);
 
 
   const filteredFolderNodes = React.useMemo(() => {
@@ -420,6 +425,17 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   const [bundleAttachmentDownloads, setBundleAttachmentDownloads] = React.useState<Array<{ url: string; name: string }>>(
     []
   );
+  const [includeEml, setIncludeEml] = React.useState(true);
+  const [includeAttachments, setIncludeAttachments] = React.useState(true);
+
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadStatus, setUploadStatus] = React.useState("");
+  const [preparedBundle, setPreparedBundle] = React.useState<{ eml: File; attachments: File[] } | null>(null);
+
+  const [isUploading, setIsUploading] = React.useState(false);
+
+
+
 
   function revokeIfAny(url: string | undefined | null) {
     if (url) URL.revokeObjectURL(url);
@@ -438,6 +454,8 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       const bundle = await getCurrentEmailBundle();
 
+
+
       const emlUrl = URL.createObjectURL(bundle.eml);
       setBundleEmlDownload({ url: emlUrl, name: bundle.eml.name });
 
@@ -454,6 +472,86 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       setBundleStatus(`Error: ${e?.message ?? String(e)}`);
     }
   }
+
+  async function onUploadBundle() {
+    try {
+      // Basic guards
+      if (!llUserEmail) {
+        setUploadStatus("Please log in first.");
+        return;
+      }
+      if (!selectedOrgId) {
+        setUploadStatus("Select an organization first.");
+        return;
+      }
+      if (!selectedScopeId) {
+        setUploadStatus("Select a case/client first.");
+        return;
+      }
+      if (!includeEml && !includeAttachments) {
+        setUploadStatus("Choose at least one: Email (.eml) and/or Attachments.");
+        return;
+      }
+
+      setUploading(true);
+      setUploadStatus("Preparing files...");
+
+      // Ensure we have a bundle
+      const b = preparedBundle ?? (await getCurrentEmailBundle());
+      if (!preparedBundle) setPreparedBundle(b);
+
+      const filesToSend: File[] = [];
+      if (includeEml) filesToSend.push(b.eml);
+      if (includeAttachments) filesToSend.push(...b.attachments);
+
+      // IMPORTANT: clients are Parties in Legal Ledger now
+      const normalizedScopeType = scopeType === "client" ? "party" : scopeType;
+
+      // Folder: empty string means Root in your UI
+
+      setUploadStatus(`Uploading ${filesToSend.length} file(s)...`);
+
+      const uploadScopeType: "case" | "party" = scopeType === "client" ? "party" : "case";
+
+      // Folder: empty string means Root in your UI
+      const folderIdOrNull: string | null = selectedFolderId ? selectedFolderId : null;
+
+      let uploaded = 0;
+
+      for (let i = 0; i < filesToSend.length; i++) {
+        const f = filesToSend[i];
+        setUploadStatus(`Uploading ${i + 1}/${filesToSend.length}: ${f.name}`);
+
+        await uploadAttachmentFile({
+          supabase: llSupabase,
+          orgId: selectedOrgId,
+          scopeType: uploadScopeType,
+          scopeId: selectedScopeId,
+          parentId: folderIdOrNull,
+          file: f,
+          customFileName: f.name,
+        });
+
+        uploaded++;
+      }
+
+      setUploadStatus(`✅ Uploaded ${uploaded} file(s) to Legal Ledger.`);
+
+      // Refresh attachment folders so the new files show up
+      const refreshed = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
+      setTreeNodes(refreshed);
+      setTreeStatus(`Loaded ${refreshed.length} node(s).`);
+
+
+      // If/when upload succeeds:
+      // setUploadStatus("Upload complete.");
+    } catch (e: any) {
+      setUploadStatus(`Error: ${e?.message ?? String(e)}`);
+    } finally {
+      setUploading(false);
+    }
+  }
+
 
   // -----------------------
   // Debug (hidden by default)
@@ -666,6 +764,19 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
 
       {/* Bundle */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+        <Checkbox
+          label="Email (.eml)"
+          checked={includeEml}
+          onChange={(_, d) => setIncludeEml(!!d.checked)}
+        />
+        <Checkbox
+          label="Attachments"
+          checked={includeAttachments}
+          onChange={(_, d) => setIncludeAttachments(!!d.checked)}
+        />
+      </div>
+
       <Card>
         <CardHeader
           header={<Text weight="semibold">Email bundle</Text>}
@@ -678,9 +789,16 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         <Divider />
         <div className={styles.cardBody}>
           <div className={styles.row}>
-            <Button appearance="primary" onClick={onPrepareBundle}>
-              Prepare email bundle
+            <Button
+              appearance="primary"
+              disabled={uploading || (!includeEml && !includeAttachments)}
+              onClick={onUploadBundle}
+            >
+              Upload to Legal Ledger
             </Button>
+
+            {uploadStatus ? <Text size={200}>{uploadStatus}</Text> : null}
+
           </div>
 
           {bundleStatus && <Text size={200}>{bundleStatus}</Text>}
