@@ -76,15 +76,15 @@
       </Hosts>
       <Resources>
         <bt:Images>
-          <bt:Image id="Icon.16x16" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/DuoBox_Legal_16x16.png"/>
-          <bt:Image id="Icon.32x32" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/DuoBox_Legal_32x32.png"/>
-          <bt:Image id="Icon.80x80" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/DuoBox_Legal_80x80.png"/>
+          <bt:Image id="Icon.16x16" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/icon-16.png"/>
+          <bt:Image id="Icon.32x32" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/icon-32.png"/>
+          <bt:Image id="Icon.80x80" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/icon-80.png"/>
         </bt:Images>
         <bt:Urls>
           <bt:Url id="Commands.Url" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/commands.html"/>
           <bt:Url id="Taskpane.Url" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/taskpane.html"/>
           <bt:ShortStrings>
-            <bt:String id="GroupLabel" DefaultValue="Contoso Add-in"/>
+            <bt:String id="GroupLabel" DefaultValue="Legal Ledger Outlook Add-in"/>
             <bt:String id="TaskpaneButton.Label" DefaultValue="Show Task Pane"/>
           </bt:ShortStrings>
           <bt:LongStrings>
