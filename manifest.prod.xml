@@ -11,7 +11,7 @@
   <Description DefaultValue="An Outlook add-in for managing legal documents and tasks in the Legal Ledger system."/>
   <IconUrl DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/icon-64.png"/>
   <HighResolutionIconUrl DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/assets/icon-128.png"/>
-  <SupportUrl DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/"/>
+  <SupportUrl DefaultValue="https://github.com/M1crob1ology/legal-ledger-outlook-addin"/>
 
   <AppDomains>
     <AppDomain>https://m1crob1ology.github.io</AppDomain>
@@ -83,14 +83,18 @@
         <bt:Urls>
           <bt:Url id="Commands.Url" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/commands.html"/>
           <bt:Url id="Taskpane.Url" DefaultValue="https://m1crob1ology.github.io/legal-ledger-outlook-addin/taskpane.html"/>
-          <bt:ShortStrings>
-            <bt:String id="GroupLabel" DefaultValue="Legal Ledger Outlook Add-in"/>
-            <bt:String id="TaskpaneButton.Label" DefaultValue="Show Task Pane"/>
-          </bt:ShortStrings>
-          <bt:LongStrings>
-            <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Opens a pane that enables users to insert text."/>
-          </bt:LongStrings>
-        </Resources>
-      </VersionOverrides>
+        </bt:Urls>
+
+        <bt:ShortStrings>
+          <bt:String id="GroupLabel" DefaultValue="Legal Ledger"/>
+          <bt:String id="TaskpaneButton.Label" DefaultValue="Show Task Pane"/>
+        </bt:ShortStrings>
+
+        <bt:LongStrings>
+          <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Open Legal Ledger task pane."/>
+        </bt:LongStrings>
+
+      </Resources>
     </VersionOverrides>
-  </OfficeApp>
+  </VersionOverrides>
+</OfficeApp>
