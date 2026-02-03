@@ -34,6 +34,7 @@ const ORG_ID_KEY = "ll:addin:orgId";
 const ORG_NAME_KEY = "ll:addin:orgName";
 
 
+
 interface AppProps {
   title: string;
 }
@@ -113,6 +114,9 @@ function uniqueUuids(values: unknown[]): string[] {
   return out;
 }
 
+const isFolderNode = (n: any) => (n?.type ?? n?.node_type ?? n?.kind) === "folder";
+
+
 
 const App: React.FC<AppProps> = (props: AppProps) => {
   const styles = useStyles();
@@ -125,6 +129,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   const [llAuthStatus, setLlAuthStatus] = React.useState<string>("");
 
   const [llUserEmail, setLlUserEmail] = React.useState<string | null>(null);
+  const [authChecked, setAuthChecked] = React.useState(false);
   const [orgs, setOrgs] = React.useState<any[]>([]);
   const [selectedOrgId, setSelectedOrgId] = React.useState<string>(() => {
     return localStorage.getItem(ORG_ID_KEY) ?? "";
@@ -141,17 +146,29 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
 
   React.useEffect(() => {
-    llSupabase.auth.getSession().then(({ data }) => {
-      const email = data.session?.user?.email ?? null;
-      setLlUserEmail(email);
-    });
+    let alive = true;
+
+    (async () => {
+      try {
+        const { data } = await llSupabase.auth.getSession();
+        if (!alive) return;
+        setLlUserEmail(data.session?.user?.email ?? null);
+      } finally {
+        if (alive) setAuthChecked(true);
+      }
+    })();
 
     const { data: sub } = llSupabase.auth.onAuthStateChange((_event, session) => {
       setLlUserEmail(session?.user?.email ?? null);
+      setAuthChecked(true);
     });
 
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
+
 
   const didInitOrgsRef = React.useRef(false);
 
@@ -175,19 +192,33 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   async function onLlLogin() {
     try {
+      const email = llEmail.trim();
+      if (!email || !llPassword) {
+        setLlAuthStatus("Enter email and password.");
+        return;
+      }
+
       setLlAuthStatus("Logging in…");
+
       const { data, error } = await llSupabase.auth.signInWithPassword({
-        email: llEmail,
+        email,
         password: llPassword,
       });
+
       if (error) throw error;
 
-      setLlUserEmail(data.user?.email ?? null);
-      setLlAuthStatus("Logged in.");
+      setLlUserEmail(data.user?.email ?? email);
+      setLlPassword(""); // don't keep password in memory
+
+      // Load orgs right away so the add-in can work immediately
+      await onLoadMyOrgs({ silent: true });
+
+      setLlAuthStatus("✅ Logged in.");
     } catch (e: any) {
       setLlAuthStatus(`Error: ${e?.message ?? String(e)}`);
     }
   }
+
 
   async function onLlLogout() {
     await llSupabase.auth.signOut();
@@ -394,14 +425,17 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       }
 
       setTreeNodes(nodes);
+
+      const folderCount = (nodes ?? []).filter(
+        (n: any) => (n.kind ?? n.type) === "folder"
+      ).length;
+
       setTreeStatus(
-        nodes.length > 0
-          ? `Loaded ${nodes.length} node(s).`
-          : `Loaded 0 node(s). (Tried scope IDs: ${candidateScopeIds.join(", ") || "none"})`
+        folderCount > 0
+          ? `Loaded ${folderCount} folder(s).`
+          : `Loaded 0 folder(s). You can upload to the root folder.`
       );
 
-      setTreeNodes(nodes);
-      setTreeStatus(`Loaded ${nodes.length} node(s).`);
     } catch (e: any) {
       setTreeStatus(`Error: ${e?.message ?? String(e)}`);
     }
@@ -434,7 +468,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const [isUploading, setIsUploading] = React.useState(false);
 
-    // Auto-clear success message after 7 seconds (only on success)
+  // Auto-clear success message after 7 seconds (only on success)
   React.useEffect(() => {
     const isSuccess =
       !!uploadStatus &&
@@ -454,6 +488,22 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     };
   }, [uploadStatus]);
 
+
+  // If you are not logged in, don't keep showing a remembered org
+  React.useEffect(() => {
+    // IMPORTANT: wait until we *know* whether the user is logged in
+    if (!authChecked) return;
+
+    // If logged in, keep remembered org
+    if (llUserEmail) return;
+
+    // Confirmed logged out -> clear remembered org
+    localStorage.removeItem(ORG_ID_KEY);
+    localStorage.removeItem(ORG_NAME_KEY);
+    setSelectedOrgId("");
+    setSelectedOrgName("");
+    setOrgs([]);
+  }, [authChecked, llUserEmail]);
 
 
 
@@ -562,7 +612,10 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       // Refresh attachment folders so the new files show up
       const refreshed = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
       setTreeNodes(refreshed);
-      setTreeStatus(`Loaded ${refreshed.length} node(s).`);
+
+      const folderCount = refreshed.filter((n: any) => (n?.type ?? n?.kind) === "folder").length;
+      setTreeStatus(`Loaded ${folderCount} folder(s).`);
+
 
 
       // If/when upload succeeds:
@@ -678,7 +731,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           </div>
         </div>
 
-        <Switch checked={showDebug} onChange={(_, data) => setShowDebug(!!data.checked)} label="Show debug" />
+
       </div>
 
       {/* Legal Ledger Connection */}
@@ -882,10 +935,37 @@ const App: React.FC<AppProps> = (props: AppProps) => {
             <DialogContent>
               {!llUserEmail ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <Text>You're not logged in.</Text>
-                  <Button appearance="primary" onClick={onLlLogin /* rename if needed */}>
-                    Log in
-                  </Button>
+                  <>
+                    <Text size={200}>You are not logged in.</Text>
+
+                    <Field label="Email">
+                      <Input
+                        value={llEmail}
+                        onChange={(e) => setLlEmail((e.target as HTMLInputElement).value)}
+                        placeholder="you@company.com"
+                      />
+                    </Field>
+
+                    <Field label="Password">
+                      <Input
+                        type="password"
+                        value={llPassword}
+                        onChange={(e) => setLlPassword((e.target as HTMLInputElement).value)}
+                        placeholder="Password"
+                      />
+                    </Field>
+
+                    <Button
+                      appearance="primary"
+                      onClick={onLlLogin}
+                      disabled={!llEmail.trim() || !llPassword}
+                    >
+                      Log in
+                    </Button>
+
+                    {llAuthStatus && <Text size={200}>{llAuthStatus}</Text>}
+                  </>
+
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
