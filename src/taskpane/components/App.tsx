@@ -28,6 +28,8 @@ import { llSupabase } from "../services/legalLedgerSupabase";
 import { getCurrentEmailBundle } from "../services/outlook";
 import { loadAttachmentTree, ScopeType, filterResults, listRecentCases, listRecentClients } from "../services/legalLedgerData";
 import { uploadAttachmentFile } from "../services/legalLedgerUpload";
+import { I18N, Lang, LANG_KEY, getInitialLang } from "../i18n";
+
 
 
 const ORG_ID_KEY = "ll:addin:orgId";
@@ -143,6 +145,14 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
 
 
+  const [lang, setLang] = React.useState<Lang>(() => getInitialLang());
+  const s = I18N[lang] ?? I18N.en;
+
+
+  React.useEffect(() => {
+    localStorage.setItem(LANG_KEY, lang);
+    document.title = s.appTitle; // updates the tab title too
+  }, [lang, s.appTitle]);
 
 
   React.useEffect(() => {
@@ -194,12 +204,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     try {
       const email = llEmail.trim();
       if (!email || !llPassword) {
-        setLlAuthStatus("Enter email and password.");
+        setLlAuthStatus(s.authEnterEmailPassword);
         return;
       }
 
-      setLlAuthStatus("Logging in…");
-
+      setLlAuthStatus(s.authLoggingIn);
       const { data, error } = await llSupabase.auth.signInWithPassword({
         email,
         password: llPassword,
@@ -213,9 +222,9 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       // Load orgs right away so the add-in can work immediately
       await onLoadMyOrgs({ silent: true });
 
-      setLlAuthStatus("✅ Logged in.");
+      setLlAuthStatus(s.authLoggedIn);
     } catch (e: any) {
-      setLlAuthStatus(`Error: ${e?.message ?? String(e)}`);
+      setLlAuthStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     }
   }
 
@@ -225,12 +234,12 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     setLlUserEmail(null);
     setOrgs([]);
     setSelectedOrgId("");
-    setLlAuthStatus("Logged out.");
+    setLlAuthStatus(s.authLoggedOut);
   }
 
   async function onLoadMyOrgs(opts: { silent?: boolean } = {}) {
     try {
-      if (!opts.silent) setLlAuthStatus("Loading organizations...");
+      if (!opts.silent) setLlAuthStatus(s.loadingOrganizations);
 
       const { data, error } = await llSupabase.rpc("list_my_orgs");
       if (error) throw error;
@@ -268,11 +277,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       }
 
       if (!opts.silent) {
-        setLlAuthStatus(list.length > 0 ? `Loaded ${list.length} org(s).` : "No organizations found.");
+        setLlAuthStatus(list.length > 0 ? s.loadedOrgs(list.length) : s.noOrganizationsFound);
       }
     } catch (e: any) {
       console.error(e);
-      if (!opts.silent) setLlAuthStatus(`Error loading orgs: ${e?.message ?? String(e)}`);
+      if (!opts.silent) setLlAuthStatus(`${s.errorLoadingOrgsPrefix}${e?.message ?? String(e)}`);
       throw e;
     }
   }
@@ -299,6 +308,28 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const destFiltered = React.useMemo(() => filterResults(destAllResults, destQuery), [destAllResults, destQuery]);
 
+  // Re-translate already shown "Loaded ..." texts when language changes
+  React.useEffect(() => {
+    // Destination status
+    if (destStatus && (destStatus.startsWith("Loaded") || destStatus.startsWith("Laddade"))) {
+      const next =
+        scopeType === "case"
+          ? s.loadedRecentCases(destAllResults.length)
+          : s.loadedRecentClients(destAllResults.length);
+
+      if (next !== destStatus) setDestStatus(next);
+    }
+
+    // Folder status
+    if (treeStatus && (treeStatus.startsWith("Loaded") || treeStatus.startsWith("Laddade"))) {
+      const folderCount = (treeNodes || []).filter((n: any) => n?.type === "folder").length;
+      const next = s.loadedFolders(folderCount);
+
+      if (next !== treeStatus) setTreeStatus(next);
+    }
+  }, [lang, destStatus, treeStatus, scopeType, destAllResults.length, treeNodes]);
+
+
   function persistSelectedOrg(orgId: string, orgName: string) {
     setSelectedOrgId(orgId);
     setSelectedOrgName(orgName);
@@ -320,20 +351,21 @@ const App: React.FC<AppProps> = (props: AppProps) => {
   }, [scopeType, selectedScopeId]);
 
   const selectedFolderLabel = React.useMemo(() => {
-    if (!selectedFolderId) return "(Root)";
+    if (!selectedFolderId) return s.root;
     const node = (treeNodes ?? []).find((n: any) => String(n.id) === String(selectedFolderId));
-    return node?.name ?? "(Root)";
-  }, [selectedFolderId, treeNodes]);
+    return node?.name ?? s.root;
+  }, [selectedFolderId, treeNodes, lang]);
+
 
   async function onLoadRecentDestination() {
     try {
-      setDestStatus("Loading recent…");
+      setDestStatus(s.loadingRecent);
       setDestAllResults([]);
       setSelectedScopeId("");
       setTreeNodes([]);
       setSelectedFolderId("");
 
-      if (!selectedOrgId) throw new Error("Select an org first.");
+      if (!selectedOrgId) throw new Error(s.selectOrganizationFirst);
 
       const results =
         scopeType === "case"
@@ -342,9 +374,9 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
 
       setDestAllResults(results);
-      setDestStatus(`Loaded ${results.length} recent ${scopeType}s.`);
+      setDestStatus(scopeType === "case" ? s.loadedRecentCases(results.length) : s.loadedRecentClients(results.length));
     } catch (e: any) {
-      setDestStatus(`Error: ${e?.message ?? String(e)}`);
+      setDestStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     }
   }
 
@@ -383,11 +415,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   async function onLoadFolders() {
     try {
-      setTreeStatus("Loading folders…");
+      setTreeStatus(s.loadingFolders);
       setTreeNodes([]);
       setSelectedFolderId("");
 
-      if (!selectedScopeId) throw new Error("Select a case/client first.");
+      if (!selectedScopeId) throw new Error(s.selectCaseOrClientFirst);
 
       // Find the selected row so we can access raw fields (party/client record)
       const selected = destAllResults.find((r) => r.id === selectedScopeId);
@@ -426,18 +458,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       setTreeNodes(nodes);
 
-      const folderCount = (nodes ?? []).filter(
-        (n: any) => (n.kind ?? n.type) === "folder"
-      ).length;
+      setTreeStatus("");
 
-      setTreeStatus(
-        folderCount > 0
-          ? `Loaded ${folderCount} folder(s).`
-          : `Loaded 0 folder(s). You can upload to the root folder.`
-      );
 
     } catch (e: any) {
-      setTreeStatus(`Error: ${e?.message ?? String(e)}`);
+      setTreeStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     }
   }
 
@@ -515,7 +540,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   async function onPrepareBundle() {
     try {
-      setBundleStatus("Preparing bundle…");
+      setBundleStatus(s.preparingBundle);
 
       // clean up old links
       revokeIfAny(bundleEmlDownload?.url);
@@ -537,11 +562,9 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       }));
       setBundleAttachmentDownloads(attachmentLinks);
 
-      setBundleStatus(
-        `Ready: ${bundle.eml.name} (${Math.round(bundle.eml.size / 1024)} KB), ${bundle.attachments.length} attachment(s)`
-      );
+      setBundleStatus(s.bundleReady(bundle.eml.name, Math.round(bundle.eml.size / 1024), bundle.attachments.length));
     } catch (e: any) {
-      setBundleStatus(`Error: ${e?.message ?? String(e)}`);
+      setBundleStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     }
   }
 
@@ -549,24 +572,24 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     try {
       // Basic guards
       if (!llUserEmail) {
-        setUploadStatus("Please log in first.");
+        setUploadStatus(s.pleaseLogInFirst);
         return;
       }
       if (!selectedOrgId) {
-        setUploadStatus("Select an organization first.");
+        setUploadStatus(s.selectOrganizationFirst);
         return;
       }
       if (!selectedScopeId) {
-        setUploadStatus("Select a case/client first.");
+        setUploadStatus(s.selectCaseOrClientFirst);
         return;
       }
       if (!includeEml && !includeAttachments) {
-        setUploadStatus("Choose at least one: Email (.eml) and/or Attachments.");
+        setUploadStatus(s.chooseAtLeastOne);
         return;
       }
 
       setUploading(true);
-      setUploadStatus("Preparing files...");
+      setUploadStatus(s.preparingFiles);
 
       // Ensure we have a bundle
       const b = preparedBundle ?? (await getCurrentEmailBundle());
@@ -581,7 +604,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       // Folder: empty string means Root in your UI
 
-      setUploadStatus(`Uploading ${filesToSend.length} file(s)...`);
+      setUploadStatus(s.uploadingTotal(filesToSend.length));
 
       const uploadScopeType: "case" | "party" = scopeType === "client" ? "party" : "case";
 
@@ -592,7 +615,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       for (let i = 0; i < filesToSend.length; i++) {
         const f = filesToSend[i];
-        setUploadStatus(`Uploading ${i + 1}/${filesToSend.length}: ${f.name}`);
+        setUploadStatus(s.uploadingN(i + 1, filesToSend.length, f.name));
 
         await uploadAttachmentFile({
           supabase: llSupabase,
@@ -607,21 +630,21 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         uploaded++;
       }
 
-      setUploadStatus(`✅ Uploaded ${uploaded} file(s) to Legal Ledger.`);
+      setUploadStatus(s.uploadedOk(uploaded));
 
       // Refresh attachment folders so the new files show up
       const refreshed = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
       setTreeNodes(refreshed);
 
-      const folderCount = refreshed.filter((n: any) => (n?.type ?? n?.kind) === "folder").length;
-      setTreeStatus(`Loaded ${folderCount} folder(s).`);
+      setTreeStatus("");
+
 
 
 
       // If/when upload succeeds:
       // setUploadStatus("Upload complete.");
     } catch (e: any) {
-      setUploadStatus(`Error: ${e?.message ?? String(e)}`);
+      setUploadStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     } finally {
       setUploading(false);
     }
@@ -640,7 +663,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       try {
         const item = Office.context?.mailbox?.item as any;
         if (!item) {
-          setMailError("No mailbox item available. Open a mail message (Read mode) and try again.");
+          setMailError(s.noMailboxItem);
           return;
         }
 
@@ -715,12 +738,12 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       <div className={styles.headerRow}>
         <div className={styles.headerLeft}>
           <Text size={600} weight="semibold">
-            {props.title || "Legal Ledger"}
+            {props.title || s.appTitle}
           </Text>
 
           <div className={styles.statusRow}>
             <Badge appearance={isLoggedIn ? "filled" : "outline"} color={isLoggedIn ? "success" : "important"}>
-              {isLoggedIn ? "Connected" : "Not connected"}
+              {isLoggedIn ? s.connected : s.notConnected}
             </Badge>
 
             {isLoggedIn && (
@@ -737,11 +760,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       {/* Legal Ledger Connection */}
       <Card>
         <CardHeader
-          header={<Text weight="semibold">Legal Ledger</Text>}
+          header={<Text weight="semibold">{s.legalLedger}</Text>}
           description={
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <Text size={200}>Logged in as: {llUserEmail || "-"}</Text>
-              <Text size={200}>Org: {selectedOrgName || "-"}</Text>
+              <Text size={200}>{s.loggedInAs} {llUserEmail || "-"}</Text>
+              <Text size={200}>{s.orgLabel} {selectedOrgName || "-"}</Text>
             </div>
           }
 
@@ -750,7 +773,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
               appearance="subtle"
               icon={<Settings24Regular />}
               onClick={openSettings}
-              aria-label="Settings"
+              aria-label={s.settings}
             />
           }
         />
@@ -759,44 +782,44 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       <>
         <div className={styles.row}>
-          <Field label="Type" className={styles.grow}>
+          <Field label={s.type} className={styles.grow}>
             <Dropdown
-              value={scopeType === "case" ? "Case" : "Client"}
+              value={scopeType === "case" ? s.case : s.client}
               selectedOptions={[scopeType]}
               onOptionSelect={(_, data) => onChangeScopeType(data.optionValue as ScopeType)}
             >
-              <Option value="case">Case</Option>
-              <Option value="client">Client</Option>
+              <Option value="case">{s.case}</Option>
+              <Option value="client">{s.client}</Option>
             </Dropdown>
           </Field>
 
           <Button onClick={onLoadRecentDestination} disabled={!selectedOrgId}>
-            Reload recent
+            {s.reloadRecent}
           </Button>
-          {!selectedOrgId && <Text size={200}>Select an org in settings first.</Text>}
+          {!selectedOrgId && <Text size={200}>{s.selectOrgFirst}</Text>}
 
 
         </div>
 
         {destStatus && <Text size={200}>{destStatus}</Text>}
 
-        <Field label="Filter">
+        <Field label={s.filter}>
           <Input
             value={destQuery}
             onChange={(e) => setDestQuery((e.target as HTMLInputElement).value)}
-            placeholder={scopeType === "case" ? "Type to filter cases…" : "Type to filter clients…"}
+            placeholder={scopeType === "case" ? s.filterCasesPlaceholder : s.filterClientsPlaceholder}
           />
         </Field>
 
 
 
         {destFiltered.length > 0 && (
-          <Field label="Select">
+          <Field label={s.select}>
             <Dropdown
               value={selectedScopeLabel}
               selectedOptions={selectedScopeId ? [selectedScopeId] : []}
               onOptionSelect={(_, data) => setSelectedScopeId(String(data.optionValue ?? ""))}
-              placeholder="Select…"
+              placeholder={s.selectPlaceholder}
             >
               {destFiltered.slice(0, 25).map((r) => (
                 <Option key={r.id} value={r.id}>
@@ -810,24 +833,27 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         {selectedScopeId && (
           <>
             <div className={styles.row}>
-              {treeStatus && <Text size={200}>{treeStatus}</Text>}
+              <Text size={200}>
+                {treeStatus || (folderNodes.length > 0 ? s.loadedFolders(folderNodes.length) : s.loadedFoldersRootHint)}
+              </Text>
+
             </div>
 
-            <Field label="Filter folders">
+            <Field label={s.filterFolders}>
               <Input
                 value={folderFilter}
                 onChange={(e) => setFolderFilter((e.target as HTMLInputElement).value)}
-                placeholder="Type to filter folders…"
+                placeholder={s.filterFoldersPlaceholder}
               />
             </Field>
 
-            <Field label="Folder (optional)">
+            <Field label={s.folderOptional}>
               <Dropdown
                 value={selectedFolderLabel}
                 selectedOptions={selectedFolderId ? [selectedFolderId] : [""]}
                 onOptionSelect={(_, data) => setSelectedFolderId(String(data.optionValue ?? ""))}
               >
-                <Option value="">(Root)</Option>
+                <Option value="">{s.root}</Option>
 
                 {filteredFolderNodes.map((n: any) => (
                   <Option key={n.id} value={String(n.id)}>
@@ -848,12 +874,12 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       {/* Bundle */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
         <Checkbox
-          label="Email (.eml)"
+          label={s.emailEml}
           checked={includeEml}
           onChange={(_, d) => setIncludeEml(!!d.checked)}
         />
         <Checkbox
-          label="Attachments"
+          label={s.attachments}
           checked={includeAttachments}
           onChange={(_, d) => setIncludeAttachments(!!d.checked)}
         />
@@ -861,10 +887,10 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       <Card>
         <CardHeader
-          header={<Text weight="semibold">Upload to Legal Ledger</Text>}
+          header={<Text weight="semibold">{s.uploadToLegalLedger}</Text>}
           description={
             <Text size={200} className={styles.subtle}>
-              Choose options and click "Upload to Legal Ledger" to upload the email and/or attachments to the selected case or client.
+              {s.uploadHelp}
             </Text>
           }
         />
@@ -874,7 +900,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         <div className={styles.cardBody}>
           <div className={styles.row}>
             <Button appearance="primary" onClick={onUploadBundle} disabled={!canUpload}>
-              Upload to Legal Ledger
+              {s.uploadToLegalLedger}
             </Button>
 
             {uploadStatus ? <Text size={200}>{uploadStatus}</Text> : null}
@@ -886,11 +912,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           {bundleEmlDownload && (
             <div>
               <Text size={200} weight="semibold">
-                Email
+                {s.email}
               </Text>
               <div>
                 <a href={bundleEmlDownload.url} download={bundleEmlDownload.name}>
-                  Download {bundleEmlDownload.name}
+                  {s.download} {bundleEmlDownload.name}
                 </a>
               </div>
             </div>
@@ -899,13 +925,13 @@ const App: React.FC<AppProps> = (props: AppProps) => {
           {bundleAttachmentDownloads.length > 0 && (
             <div>
               <Text size={200} weight="semibold">
-                Attachments
+                {s.attachments}
               </Text>
               <ul className={styles.downloadsList}>
                 {bundleAttachmentDownloads.map((d) => (
                   <li key={d.name}>
                     <a href={d.url} download={d.name}>
-                      Download {d.name}
+                      {s.download} {d.name}
                     </a>
                   </li>
                 ))}
@@ -918,7 +944,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       {/* Debug (toggle) */}
       {showDebug && (
         <Card>
-          <CardHeader header={<Text weight="semibold">Debug</Text>} />
+          <CardHeader header={<Text weight="semibold">{s.debug}</Text>} />
           <Divider />
           <div className={styles.cardBody}>
             {mailError && <div className={styles.codeBox}>{mailError}</div>}
@@ -930,28 +956,28 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       <Dialog open={settingsOpen} onOpenChange={(_, data) => setSettingsOpen(data.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Legal Ledger settings</DialogTitle>
+            <DialogTitle>{s.settingsTitle}</DialogTitle>
 
             <DialogContent>
               {!llUserEmail ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <>
-                    <Text size={200}>You are not logged in.</Text>
+                    <Text size={200}>{s.notLoggedIn}</Text>
 
-                    <Field label="Email">
+                    <Field label={s.email}>
                       <Input
                         value={llEmail}
                         onChange={(e) => setLlEmail((e.target as HTMLInputElement).value)}
-                        placeholder="you@company.com"
+                        placeholder={s.emailPlaceholder}
                       />
                     </Field>
 
-                    <Field label="Password">
+                    <Field label={s.password}>
                       <Input
                         type="password"
                         value={llPassword}
                         onChange={(e) => setLlPassword((e.target as HTMLInputElement).value)}
-                        placeholder="Password"
+                        placeholder={s.passwordPlaceholder}
                       />
                     </Field>
 
@@ -960,7 +986,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
                       onClick={onLlLogin}
                       disabled={!llEmail.trim() || !llPassword}
                     >
-                      Log in
+                      {s.login}
                     </Button>
 
                     {llAuthStatus && <Text size={200}>{llAuthStatus}</Text>}
@@ -969,12 +995,12 @@ const App: React.FC<AppProps> = (props: AppProps) => {
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <Field label="Organization">
+                  <Field label={s.organization}>
                     {orgs.length === 0 ? (
-                      <Text size={200}>Loading organizations…</Text>
+                      <Text size={200}>{s.loadingOrganizations}</Text>
                     ) : (
                       <Dropdown
-                        value={selectedOrgName || "Select org…"}
+                        value={selectedOrgName || s.selectOrg}
                         selectedOptions={selectedOrgId ? [selectedOrgId] : []}
                         onOptionSelect={(_, data) => {
                           const orgId = String(data.optionValue ?? "");
@@ -984,7 +1010,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
                           persistSelectedOrg(orgId, orgName);
                         }}
-                        placeholder="Select…"
+                        placeholder={s.selectPlaceholder}
                       >
                         {orgs.map((o: any) => {
                           const id = String(o.org_id ?? o.id);
@@ -999,14 +1025,29 @@ const App: React.FC<AppProps> = (props: AppProps) => {
                     )}
                   </Field>
 
-                  <Button onClick={onLlLogout /* rename if needed */}>Log out</Button>
+                  <Button onClick={onLlLogout /* rename if needed */}>{s.logout}</Button>
                 </div>
               )}
             </DialogContent>
 
+            <Field label={s.language}>
+              <Dropdown
+                selectedOptions={[lang]}
+                value={lang === "en" ? s.english : s.swedish}
+                onOptionSelect={(_, data) => {
+                  const v = String(data.optionValue ?? "");
+                  if (v === "en" || v === "sv") setLang(v);
+                }}
+              >
+                <Option value="en">{s.english}</Option>
+                <Option value="sv">{s.swedish}</Option>
+              </Dropdown>
+            </Field>
+
+
             <DialogActions>
               <Button appearance="primary" onClick={() => setSettingsOpen(false)}>
-                Done
+                {s.done}
               </Button>
             </DialogActions>
           </DialogBody>
