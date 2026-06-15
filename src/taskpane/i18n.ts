@@ -110,6 +110,10 @@ export const I18N = {
     uploadingN: (i: number, total: number, name: string) => `Uploading ${i}/${total}: ${name}`,
     uploadingTotal: (n: number) => `Uploading ${n} file(s)…`,
     uploadedOk: (n: number) => `✅ Uploaded ${n} file(s) to Legal Ledger.`,
+    uploadedPartial: (uploaded: number, total: number, failed: string) =>
+      `⚠️ Uploaded ${uploaded} of ${total} file(s). Failed: ${failed}`,
+    fileTooBig: (names: string) => `${names} exceed(s) the 25 MB limit and can't be uploaded.`,
+    skippedAttachmentsNote: (names: string) => `Skipped (cloud/inline, not uploaded): ${names}`,
     chooseAtLeastOne: "Choose at least one: Email (.eml) and/or Attachments.",
     pleaseLogInFirst: "Please log in first.",
   },
@@ -200,6 +204,10 @@ export const I18N = {
     uploadingN: (i: number, total: number, name: string) => `Laddar upp ${i}/${total}: ${name}`,
     uploadingTotal: (n: number) => `Laddar upp ${n} fil(er)…`,
     uploadedOk: (n: number) => `✅ Laddade upp ${n} fil(er) till Legal Ledger.`,
+    uploadedPartial: (uploaded: number, total: number, failed: string) =>
+      `⚠️ Laddade upp ${uploaded} av ${total} fil(er). Misslyckades: ${failed}`,
+    fileTooBig: (names: string) => `${names} överskrider gränsen på 25 MB och kan inte laddas upp.`,
+    skippedAttachmentsNote: (names: string) => `Hoppade över (moln/inbäddat, ej uppladdat): ${names}`,
     chooseAtLeastOne: "Välj minst en: E-post (.eml) och/eller Bilagor.",
     pleaseLogInFirst: "Logga in först.",
   },

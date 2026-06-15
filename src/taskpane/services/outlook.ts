@@ -148,7 +148,12 @@ export async function getCurrentMessageAsEmlFile(): Promise<File> {
 }
 
 
-export async function getCurrentMessageAttachmentsAsFiles(): Promise<File[]> {
+export interface AttachmentsResult {
+    files: File[];
+    skipped: string[];
+}
+
+export async function getCurrentMessageAttachmentsAsFiles(): Promise<AttachmentsResult> {
     const item: any = Office.context?.mailbox?.item;
 
     if (!item) {
@@ -157,16 +162,23 @@ export async function getCurrentMessageAttachmentsAsFiles(): Promise<File[]> {
 
     const attachments: any[] = item.attachments || [];
     const files: File[] = [];
+    const skipped: string[] = [];
 
     for (const att of attachments) {
+        const name = safeFilename(att.name || `attachment-${att.id}`);
+
+        // Inline attachments are typically signature/embedded images — skip them.
+        if (att.isInline === true) {
+            skipped.push(name);
+            continue;
+        }
+
         const content = await new Promise<Office.AttachmentContent>((resolve, reject) => {
             item.getAttachmentContentAsync(att.id, (res: Office.AsyncResult<Office.AttachmentContent>) => {
                 if (res.status === Office.AsyncResultStatus.Succeeded) resolve(res.value);
                 else reject(new Error(res.error?.message || `getAttachmentContentAsync failed for ${att.name}`));
             });
         });
-
-        const name = safeFilename(att.name || `attachment-${att.id}`);
 
         // content.format: "base64" | "url" | "eml" | "iCal"
         if (content.format === "base64") {
@@ -185,29 +197,34 @@ export async function getCurrentMessageAttachmentsAsFiles(): Promise<File[]> {
         }
 
         if (content.format === "url") {
-            // Often cloud attachments / links. We’ll handle these later.
-            throw new Error(`Attachment "${name}" is a URL-type attachment and is not supported yet.`);
+            // Cloud attachments / links: no inline bytes to upload. Record and skip
+            // so the rest of the bundle still uploads.
+            skipped.push(name);
+            continue;
         }
 
-        throw new Error(`Unsupported attachment format "${content.format}" for "${name}".`);
+        // Unknown/unsupported format: skip rather than aborting the whole bundle.
+        skipped.push(name);
     }
 
-    return files;
+    return { files, skipped };
 }
 
 export async function getCurrentEmailBundle(): Promise<{
   eml: File;
   attachments: File[];
+  skippedAttachments: string[];
   meta: { subject: string; from?: string; received?: string };
 }> {
   const item: any = Office.context?.mailbox?.item;
 
   const eml = await getCurrentMessageAsEmlFile();
-  const attachments = await getCurrentMessageAttachmentsAsFiles();
+  const { files: attachments, skipped: skippedAttachments } = await getCurrentMessageAttachmentsAsFiles();
 
   return {
     eml,
     attachments,
+    skippedAttachments,
     meta: {
       subject: item?.subject ?? "",
       from: item?.from?.emailAddress ?? undefined,

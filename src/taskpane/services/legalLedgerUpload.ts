@@ -13,7 +13,10 @@ export async function uploadAttachmentFile(p: {
 
   const bucket = scopeType === "case" ? "case-attachments" : "client-attachments";
   const fileExt = (file.name.split(".").pop() || "bin").toLowerCase();
-  const storagePath = `${orgId}/${scopeId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+  // Org-prefixed path matches the main app + storage RLS. crypto.randomUUID()
+  // avoids the collision risk of Math.random() across concurrent uploads.
+  const uniqueSuffix = `${Date.now()}-${crypto.randomUUID()}`;
+  const storagePath = `${orgId}/${scopeId}/${uniqueSuffix}.${fileExt}`;
 
   const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, file);
   if (uploadError) throw uploadError;
@@ -30,7 +33,12 @@ export async function uploadAttachmentFile(p: {
     file_size: file.size || null,
   });
 
-  if (dbError) throw dbError;
+  if (dbError) {
+    // The blob uploaded but the DB row didn't land — remove the now-orphaned
+    // storage object so it doesn't linger unreferenced. Best-effort.
+    await supabase.storage.from(bucket).remove([storagePath]);
+    throw dbError;
+  }
 
   return { bucket, storagePath };
 }

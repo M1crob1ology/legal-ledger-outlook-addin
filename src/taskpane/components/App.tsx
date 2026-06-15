@@ -489,7 +489,11 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   const [uploading, setUploading] = React.useState(false);
   const [uploadStatus, setUploadStatus] = React.useState("");
-  const [preparedBundle, setPreparedBundle] = React.useState<{ eml: File; attachments: File[] } | null>(null);
+  const [preparedBundle, setPreparedBundle] = React.useState<{
+    eml: File;
+    attachments: File[];
+    skippedAttachments: string[];
+  } | null>(null);
 
   const [isUploading, setIsUploading] = React.useState(false);
 
@@ -562,7 +566,10 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       }));
       setBundleAttachmentDownloads(attachmentLinks);
 
-      setBundleStatus(s.bundleReady(bundle.eml.name, Math.round(bundle.eml.size / 1024), bundle.attachments.length));
+      const readyMsg = s.bundleReady(bundle.eml.name, Math.round(bundle.eml.size / 1024), bundle.attachments.length);
+      const skippedNote =
+        bundle.skippedAttachments.length > 0 ? ` ${s.skippedAttachmentsNote(bundle.skippedAttachments.join(", "))}` : "";
+      setBundleStatus(`${readyMsg}${skippedNote}`);
     } catch (e: any) {
       setBundleStatus(`${s.errorPrefix}${e?.message ?? String(e)}`);
     }
@@ -599,10 +606,14 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       if (includeEml) filesToSend.push(b.eml);
       if (includeAttachments) filesToSend.push(...b.attachments);
 
-      // IMPORTANT: clients are Parties in Legal Ledger now
-      const normalizedScopeType = scopeType === "client" ? "party" : scopeType;
-
-      // Folder: empty string means Root in your UI
+      // Client-side size guard (re-introduces the cap the old edge function enforced).
+      const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+      const tooBig = filesToSend.filter((f) => f.size > MAX_FILE_SIZE);
+      if (tooBig.length > 0) {
+        setUploadStatus(s.fileTooBig(tooBig.map((f) => f.name).join(", ")));
+        setUploading(false);
+        return;
+      }
 
       setUploadStatus(s.uploadingTotal(filesToSend.length));
 
@@ -612,25 +623,37 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       const folderIdOrNull: string | null = selectedFolderId ? selectedFolderId : null;
 
       let uploaded = 0;
+      const failed: string[] = [];
 
       for (let i = 0; i < filesToSend.length; i++) {
         const f = filesToSend[i];
         setUploadStatus(s.uploadingN(i + 1, filesToSend.length, f.name));
 
-        await uploadAttachmentFile({
-          supabase: llSupabase,
-          orgId: selectedOrgId,
-          scopeType: uploadScopeType,
-          scopeId: selectedScopeId,
-          parentId: folderIdOrNull,
-          file: f,
-          customFileName: f.name,
-        });
-
-        uploaded++;
+        try {
+          await uploadAttachmentFile({
+            supabase: llSupabase,
+            orgId: selectedOrgId,
+            scopeType: uploadScopeType,
+            scopeId: selectedScopeId,
+            parentId: folderIdOrNull,
+            file: f,
+            customFileName: f.name,
+          });
+          uploaded++;
+        } catch (err) {
+          console.error(`Upload failed for ${f.name}`, err);
+          failed.push(f.name);
+        }
       }
 
-      setUploadStatus(s.uploadedOk(uploaded));
+      const skippedNote =
+        b.skippedAttachments.length > 0 ? ` ${s.skippedAttachmentsNote(b.skippedAttachments.join(", "))}` : "";
+
+      if (failed.length > 0) {
+        setUploadStatus(`${s.uploadedPartial(uploaded, filesToSend.length, failed.join(", "))}${skippedNote}`);
+      } else {
+        setUploadStatus(`${s.uploadedOk(uploaded)}${skippedNote}`);
+      }
 
       // Refresh attachment folders so the new files show up
       const refreshed = await loadAttachmentTree({ scopeType, scopeId: selectedScopeId });
