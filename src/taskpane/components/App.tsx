@@ -624,6 +624,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
       let uploaded = 0;
       const failed: string[] = [];
+      let firstError = "";
 
       for (let i = 0; i < filesToSend.length; i++) {
         const f = filesToSend[i];
@@ -640,9 +641,10 @@ const App: React.FC<AppProps> = (props: AppProps) => {
             customFileName: f.name,
           });
           uploaded++;
-        } catch (err) {
+        } catch (err: any) {
           console.error(`Upload failed for ${f.name}`, err);
           failed.push(f.name);
+          if (!firstError) firstError = err?.message ?? String(err);
         }
       }
 
@@ -650,7 +652,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         b.skippedAttachments.length > 0 ? ` ${s.skippedAttachmentsNote(b.skippedAttachments.join(", "))}` : "";
 
       if (failed.length > 0) {
-        setUploadStatus(`${s.uploadedPartial(uploaded, filesToSend.length, failed.join(", "))}${skippedNote}`);
+        setUploadStatus(`${s.uploadedPartial(uploaded, filesToSend.length, failed.join(", "), firstError)}${skippedNote}`);
       } else {
         setUploadStatus(`${s.uploadedOk(uploaded)}${skippedNote}`);
       }
